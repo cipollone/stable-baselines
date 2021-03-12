@@ -479,7 +479,7 @@ def outer_scope_getter(scope, new_scope=""):
 # ================================================================
 
 
-def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps):
+def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps, scope=None):
     """
     calculates the cumulated episode reward, and prints to tensorflow log the output
 
@@ -488,10 +488,13 @@ def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps):
     :param masks: (np.array bool) the end of episodes
     :param writer: (TensorFlow Session.writer) the writer to log to
     :param steps: (int) the current timestep
-    :return: (np.array float) the updated total running reward
+    :param scope: any name where to group tensorboard logs
     :return: (np.array float) the updated total running reward
     """
     with tf.variable_scope("environment_info", reuse=True):
+
+        scope = scope + "/" if scope else ""
+
         for env_idx in range(rewards.shape[0]):
             dones_idx = np.sort(np.argwhere(masks[env_idx]))
 
@@ -499,11 +502,19 @@ def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps):
                 rew_acc[env_idx] += sum(rewards[env_idx])
             else:
                 rew_acc[env_idx] += sum(rewards[env_idx, :dones_idx[0, 0]])
-                summary = tf.Summary(value=[tf.Summary.Value(tag="episode_reward", simple_value=rew_acc[env_idx])])
+                summary = tf.Summary(
+                    value=[tf.Summary.Value(
+                        tag=scope + "episode_reward",
+                        simple_value=rew_acc[env_idx]
+                    )])
                 writer.add_summary(summary, steps + dones_idx[0, 0])
                 for k in range(1, len(dones_idx[:, 0])):
                     rew_acc[env_idx] = sum(rewards[env_idx, dones_idx[k - 1, 0]:dones_idx[k, 0]])
-                    summary = tf.Summary(value=[tf.Summary.Value(tag="episode_reward", simple_value=rew_acc[env_idx])])
+                    summary = tf.Summary(
+                        value=[tf.Summary.Value(
+                            tag=scope + "episode_reward",
+                            simple_value=rew_acc[env_idx])
+                        ])
                     writer.add_summary(summary, steps + dones_idx[k, 0])
                 rew_acc[env_idx] = sum(rewards[env_idx, dones_idx[-1, 0]:])
 

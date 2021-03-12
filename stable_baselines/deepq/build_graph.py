@@ -325,9 +325,12 @@ def build_act_with_param_noise(q_func, ob_space, ac_space, stochastic_ph, update
     return act, obs_phs
 
 
-def build_train(q_func, ob_space, ac_space, optimizer, sess, grad_norm_clipping=None,
-                gamma=1.0, double_q=True, scope="deepq", reuse=None,
-                param_noise=False, param_noise_filter_func=None, full_tensorboard_log=False):
+def build_train(
+    q_func, ob_space, ac_space, optimizer, sess, grad_norm_clipping=None,
+    gamma=1.0, double_q=True, scope="deepq", reuse=None, param_noise=False,
+    param_noise_filter_func=None, full_tensorboard_log=False,
+    outer_scope="Agent",
+):
     """
     Creates the train function:
 
@@ -360,99 +363,101 @@ def build_train(q_func, ob_space, ac_space, optimizer, sess, grad_norm_clipping=
             See the top of the file for details.
         step_model: (DQNPolicy) Policy for evaluation
     """
-    n_actions = ac_space.nvec if isinstance(ac_space, MultiDiscrete) else ac_space.n
-    with tf.variable_scope("input", reuse=reuse):
-        stochastic_ph = tf.placeholder(tf.bool, (), name="stochastic")
-        update_eps_ph = tf.placeholder(tf.float32, (), name="update_eps")
+    with tf.variable_scope(scope):
 
-    with tf.variable_scope(scope, reuse=reuse):
+        n_actions = ac_space.nvec if isinstance(ac_space, MultiDiscrete) else ac_space.n
+        with tf.variable_scope("input", reuse=reuse):
+            stochastic_ph = tf.placeholder(tf.bool, (), name="stochastic")
+            update_eps_ph = tf.placeholder(tf.float32, (), name="update_eps")
 
-        # Act
-        if param_noise:
-            act_f, obs_phs = build_act_with_param_noise(
-                q_func, ob_space, ac_space, stochastic_ph, update_eps_ph,
-                sess, param_noise_filter_func=param_noise_filter_func)
-        else:
-            act_f, obs_phs = build_act(
-                q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess)
+        with tf.variable_scope(scope, reuse=reuse):
 
-        # q network evaluation
-        with tf.variable_scope("step_model", reuse=True, custom_getter=tf_util.outer_scope_getter("step_model")):
-            step_model = q_func(sess, ob_space, ac_space, 1, 1, None, reuse=True, obs_phs=obs_phs)
-        q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=tf.get_variable_scope().name + "/model")
-        # target q network evaluation
+            # Act
+            if param_noise:
+                act_f, obs_phs = build_act_with_param_noise(
+                    q_func, ob_space, ac_space, stochastic_ph, update_eps_ph,
+                    sess, param_noise_filter_func=param_noise_filter_func)
+            else:
+                act_f, obs_phs = build_act(
+                    q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess)
 
-        with tf.variable_scope("target_q_func", reuse=False):
-            target_policy = q_func(sess, ob_space, ac_space, 1, 1, None, reuse=False)
-        target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
-                                               scope=tf.get_variable_scope().name + "/target_q_func")
+            # q network evaluation
+            with tf.variable_scope("step_model", reuse=True, custom_getter=tf_util.outer_scope_getter("step_model")):
+                step_model = q_func(sess, ob_space, ac_space, 1, 1, None, reuse=True, obs_phs=obs_phs)
+            q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=tf.get_variable_scope().name + "/model")
+            # target q network evaluation
 
-        # compute estimate of best possible value starting from state at t + 1
-        double_q_values = None
-        double_obs_ph = target_policy.obs_ph
-        if double_q:
-            with tf.variable_scope("double_q", reuse=True, custom_getter=tf_util.outer_scope_getter("double_q")):
-                double_policy = q_func(sess, ob_space, ac_space, 1, 1, None, reuse=True)
-                double_q_values = double_policy.q_values
-                double_obs_ph = double_policy.obs_ph
+            with tf.variable_scope("target_q_func", reuse=False):
+                target_policy = q_func(sess, ob_space, ac_space, 1, 1, None, reuse=False)
+            target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
+                                                   scope=tf.get_variable_scope().name + "/target_q_func")
 
-    with tf.variable_scope("loss", reuse=reuse):
-        # set up placeholders
-        act_t_ph = tf.placeholder(tf.int32, [None], name="action")
-        rew_t_ph = tf.placeholder(tf.float32, [None], name="reward")
-        done_mask_ph = tf.placeholder(tf.float32, [None], name="done")
-        importance_weights_ph = tf.placeholder(tf.float32, [None], name="weight")
+            # compute estimate of best possible value starting from state at t + 1
+            double_q_values = None
+            double_obs_ph = target_policy.obs_ph
+            if double_q:
+                with tf.variable_scope("double_q", reuse=True, custom_getter=tf_util.outer_scope_getter("double_q")):
+                    double_policy = q_func(sess, ob_space, ac_space, 1, 1, None, reuse=True)
+                    double_q_values = double_policy.q_values
+                    double_obs_ph = double_policy.obs_ph
 
-        # q scores for actions which we know were selected in the given state.
-        q_t_selected = tf.reduce_sum(step_model.q_values * tf.one_hot(act_t_ph, n_actions), axis=1)
+        with tf.variable_scope("loss", reuse=reuse):
+            # set up placeholders
+            act_t_ph = tf.placeholder(tf.int32, [None], name="action")
+            rew_t_ph = tf.placeholder(tf.float32, [None], name="reward")
+            done_mask_ph = tf.placeholder(tf.float32, [None], name="done")
+            importance_weights_ph = tf.placeholder(tf.float32, [None], name="weight")
 
-        # compute estimate of best possible value starting from state at t + 1
-        if double_q:
-            q_tp1_best_using_online_net = tf.argmax(double_q_values, axis=1)
-            q_tp1_best = tf.reduce_sum(target_policy.q_values * tf.one_hot(q_tp1_best_using_online_net, n_actions), axis=1)
-        else:
-            q_tp1_best = tf.reduce_max(target_policy.q_values, axis=1)
-        q_tp1_best_masked = (1.0 - done_mask_ph) * q_tp1_best
+            # q scores for actions which we know were selected in the given state.
+            q_t_selected = tf.reduce_sum(step_model.q_values * tf.one_hot(act_t_ph, n_actions), axis=1)
 
-        # compute RHS of bellman equation
-        q_t_selected_target = rew_t_ph + gamma * q_tp1_best_masked
+            # compute estimate of best possible value starting from state at t + 1
+            if double_q:
+                q_tp1_best_using_online_net = tf.argmax(double_q_values, axis=1)
+                q_tp1_best = tf.reduce_sum(target_policy.q_values * tf.one_hot(q_tp1_best_using_online_net, n_actions), axis=1)
+            else:
+                q_tp1_best = tf.reduce_max(target_policy.q_values, axis=1)
+            q_tp1_best_masked = (1.0 - done_mask_ph) * q_tp1_best
 
-        # compute the error (potentially clipped)
-        td_error = q_t_selected - tf.stop_gradient(q_t_selected_target)
-        errors = tf_util.huber_loss(td_error)
-        weighted_error = tf.reduce_mean(importance_weights_ph * errors)
+            # compute RHS of bellman equation
+            q_t_selected_target = rew_t_ph + gamma * q_tp1_best_masked
 
-        tf.summary.scalar("td_error", tf.reduce_mean(td_error))
-        tf.summary.scalar("loss", weighted_error)
+            # compute the error (potentially clipped)
+            td_error = q_t_selected - tf.stop_gradient(q_t_selected_target)
+            errors = tf_util.huber_loss(td_error)
+            weighted_error = tf.reduce_mean(importance_weights_ph * errors)
 
-        if full_tensorboard_log:
-            tf.summary.histogram("td_error", td_error)
+            tf.summary.scalar("td_error", tf.reduce_mean(td_error))
+            tf.summary.scalar("loss", weighted_error)
 
-        # update_target_fn will be called periodically to copy Q network to target Q network
-        update_target_expr = []
-        for var, var_target in zip(sorted(q_func_vars, key=lambda v: v.name),
-                                   sorted(target_q_func_vars, key=lambda v: v.name)):
-            update_target_expr.append(var_target.assign(var))
-        update_target_expr = tf.group(*update_target_expr)
+            if full_tensorboard_log:
+                tf.summary.histogram("td_error", td_error)
 
-        # compute optimization op (potentially with gradient clipping)
-        gradients = optimizer.compute_gradients(weighted_error, var_list=q_func_vars)
-        if grad_norm_clipping is not None:
-            for i, (grad, var) in enumerate(gradients):
-                if grad is not None:
-                    gradients[i] = (tf.clip_by_norm(grad, grad_norm_clipping), var)
+            # update_target_fn will be called periodically to copy Q network to target Q network
+            update_target_expr = []
+            for var, var_target in zip(sorted(q_func_vars, key=lambda v: v.name),
+                                       sorted(target_q_func_vars, key=lambda v: v.name)):
+                update_target_expr.append(var_target.assign(var))
+            update_target_expr = tf.group(*update_target_expr)
 
-    with tf.variable_scope("input_info", reuse=False):
-        tf.summary.scalar('rewards', tf.reduce_mean(rew_t_ph))
-        tf.summary.scalar('importance_weights', tf.reduce_mean(importance_weights_ph))
+            # compute optimization op (potentially with gradient clipping)
+            gradients = optimizer.compute_gradients(weighted_error, var_list=q_func_vars)
+            if grad_norm_clipping is not None:
+                for i, (grad, var) in enumerate(gradients):
+                    if grad is not None:
+                        gradients[i] = (tf.clip_by_norm(grad, grad_norm_clipping), var)
 
-        if full_tensorboard_log:
-            tf.summary.histogram('rewards', rew_t_ph)
-            tf.summary.histogram('importance_weights', importance_weights_ph)
-            if tf_util.is_image(obs_phs[0]):
-                tf.summary.image('observation', obs_phs[0])
-            elif len(obs_phs[0].shape) == 1:
-                tf.summary.histogram('observation', obs_phs[0])
+        with tf.variable_scope("input_info", reuse=False):
+            tf.summary.scalar('rewards', tf.reduce_mean(rew_t_ph))
+            tf.summary.scalar('importance_weights', tf.reduce_mean(importance_weights_ph))
+
+            if full_tensorboard_log:
+                tf.summary.histogram('rewards', rew_t_ph)
+                tf.summary.histogram('importance_weights', importance_weights_ph)
+                if tf_util.is_image(obs_phs[0]):
+                    tf.summary.image('observation', obs_phs[0])
+                elif len(obs_phs[0].shape) == 1:
+                    tf.summary.histogram('observation', obs_phs[0])
 
     optimize_expr = optimizer.apply_gradients(gradients)
 

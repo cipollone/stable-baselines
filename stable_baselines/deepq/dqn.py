@@ -54,17 +54,26 @@ class DQN(OffPolicyRLModel):
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
     """
-    def __init__(self, policy, env, gamma=0.99, learning_rate=5e-4, buffer_size=50000, exploration_fraction=0.1,
-                 exploration_final_eps=0.02, exploration_initial_eps=1.0, train_freq=1, batch_size=32, double_q=True,
-                 learning_starts=1000, target_network_update_freq=500, prioritized_replay=False,
-                 prioritized_replay_alpha=0.6, prioritized_replay_beta0=0.4, prioritized_replay_beta_iters=None,
-                 prioritized_replay_eps=1e-6, param_noise=False,
-                 n_cpu_tf_sess=None, verbose=0, tensorboard_log=None,
-                 _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False, seed=None):
+    def __init__(
+        self, policy, env, gamma=0.99, learning_rate=5e-4, buffer_size=50000,
+        exploration_fraction=0.1, exploration_final_eps=0.02,
+        exploration_initial_eps=1.0, train_freq=1, batch_size=32,
+        double_q=True, learning_starts=1000, target_network_update_freq=500,
+        prioritized_replay=False, prioritized_replay_alpha=0.6,
+        prioritized_replay_beta0=0.4, prioritized_replay_beta_iters=None,
+        prioritized_replay_eps=1e-6, param_noise=False, n_cpu_tf_sess=None,
+        verbose=0, tensorboard_log=None, _init_setup_model=True,
+        agent_name="Agent1", policy_kwargs=None, full_tensorboard_log=False,
+        seed=None,
+    ):
 
         # TODO: replay_buffer refactoring
-        super(DQN, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, policy_base=DQNPolicy,
-                                  requires_vec_env=False, policy_kwargs=policy_kwargs, seed=seed, n_cpu_tf_sess=n_cpu_tf_sess)
+        super(DQN, self).__init__(
+            policy=policy, env=env, replay_buffer=None, verbose=verbose,
+            policy_base=DQNPolicy, requires_vec_env=False,
+            policy_kwargs=policy_kwargs, seed=seed,
+            n_cpu_tf_sess=n_cpu_tf_sess
+        )
 
         self.param_noise = param_noise
         self.learning_starts = learning_starts
@@ -85,6 +94,7 @@ class DQN(OffPolicyRLModel):
         self.tensorboard_log = tensorboard_log
         self.full_tensorboard_log = full_tensorboard_log
         self.double_q = double_q
+        self.agent_name = agent_name
 
         self.graph = None
         self.sess = None
@@ -126,7 +136,10 @@ class DQN(OffPolicyRLModel):
                 self.set_random_seed(self.seed)
                 self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
 
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                optimizer = tf.train.AdamOptimizer(
+                    learning_rate=self.learning_rate,
+                    name="Adam_" + self.agent_name
+                )
 
                 self.act, self._train_step, self.update_target, self.step_model = build_train(
                     q_func=partial(self.policy, **self.policy_kwargs),
@@ -138,7 +151,8 @@ class DQN(OffPolicyRLModel):
                     param_noise=self.param_noise,
                     sess=self.sess,
                     full_tensorboard_log=self.full_tensorboard_log,
-                    double_q=self.double_q
+                    double_q=self.double_q,
+                    scope=self.agent_name,
                 )
                 self.proba_step = self.step_model.proba_step
                 self.params = tf_util.get_trainable_vars("deepq")
@@ -242,8 +256,10 @@ class DQN(OffPolicyRLModel):
                 if writer is not None:
                     ep_rew = np.array([reward_]).reshape((1, -1))
                     ep_done = np.array([done]).reshape((1, -1))
-                    tf_util.total_episode_reward_logger(self.episode_reward, ep_rew, ep_done, writer,
-                                                        self.num_timesteps)
+                    tf_util.total_episode_reward_logger(
+                        self.episode_reward, ep_rew, ep_done, writer,
+                        self.num_timesteps, scope="env",
+                    )
 
                 episode_rewards[-1] += reward_
                 if done:
@@ -325,6 +341,10 @@ class DQN(OffPolicyRLModel):
 
         callback.on_training_end()
         return self
+
+    def _learn_step_from_batch():
+        """One step of the optimization."""
+        # TODO: put here the optimization step of a passive agent
 
     def predict(self, observation, state=None, mask=None, deterministic=True):
         observation = np.array(observation)
