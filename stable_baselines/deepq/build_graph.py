@@ -136,20 +136,26 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
         act function to select and action given observation (See the top of the file for details),
         A tuple containing the observation placeholder and the processed observation placeholder respectively.
     """
-    eps = tf.get_variable("eps", (), initializer=tf.constant_initializer(0))
-
+    # Network
     policy = q_func(sess, ob_space, ac_space, 1, 1, None)
-    obs_phs = (policy.obs_ph, policy.processed_obs)
-    deterministic_actions = tf.argmax(policy.q_values, axis=1)
 
-    batch_size = tf.shape(policy.obs_ph)[0]
-    n_actions = ac_space.nvec if isinstance(ac_space, MultiDiscrete) else ac_space.n
-    random_actions = tf.random_uniform(tf.stack([batch_size]), minval=0, maxval=n_actions, dtype=tf.int64)
-    chose_random = tf.random_uniform(tf.stack([batch_size]), minval=0, maxval=1, dtype=tf.float32) < eps
-    stochastic_actions = tf.where(chose_random, random_actions, deterministic_actions)
+    # Choose action
+    with tf.variable_scope("select_action"):
+        eps = tf.get_variable("eps", (), initializer=tf.constant_initializer(0))
+        tf.summary.scalar("eps", eps)
 
-    output_actions = tf.cond(stochastic_ph, lambda: stochastic_actions, lambda: deterministic_actions)
-    update_eps_expr = eps.assign(tf.cond(update_eps_ph >= 0, lambda: update_eps_ph, lambda: eps))
+        obs_phs = (policy.obs_ph, policy.processed_obs)
+        deterministic_actions = tf.argmax(policy.q_values, axis=1)
+
+        batch_size = tf.shape(policy.obs_ph)[0]
+        n_actions = ac_space.nvec if isinstance(ac_space, MultiDiscrete) else ac_space.n
+        random_actions = tf.random_uniform(tf.stack([batch_size]), minval=0, maxval=n_actions, dtype=tf.int64)
+        chose_random = tf.random_uniform(tf.stack([batch_size]), minval=0, maxval=1, dtype=tf.float32) < eps
+        stochastic_actions = tf.where(chose_random, random_actions, deterministic_actions)
+
+        output_actions = tf.cond(stochastic_ph, lambda: stochastic_actions, lambda: deterministic_actions)
+        update_eps_expr = eps.assign(tf.cond(update_eps_ph >= 0, lambda: update_eps_ph, lambda: eps))
+
     _act = tf_util.function(inputs=[policy.obs_ph, stochastic_ph, update_eps_ph],
                             outputs=output_actions,
                             givens={update_eps_ph: -1.0, stochastic_ph: True},
@@ -360,11 +366,15 @@ def build_train(q_func, ob_space, ac_space, optimizer, sess, grad_norm_clipping=
         update_eps_ph = tf.placeholder(tf.float32, (), name="update_eps")
 
     with tf.variable_scope(scope, reuse=reuse):
+
+        # Act
         if param_noise:
-            act_f, obs_phs = build_act_with_param_noise(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess,
-                                                        param_noise_filter_func=param_noise_filter_func)
+            act_f, obs_phs = build_act_with_param_noise(
+                q_func, ob_space, ac_space, stochastic_ph, update_eps_ph,
+                sess, param_noise_filter_func=param_noise_filter_func)
         else:
-            act_f, obs_phs = build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess)
+            act_f, obs_phs = build_act(
+                q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess)
 
         # q network evaluation
         with tf.variable_scope("step_model", reuse=True, custom_getter=tf_util.outer_scope_getter("step_model")):
