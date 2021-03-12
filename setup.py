@@ -13,38 +13,6 @@ with open(os.path.join('stable_baselines', 'version.txt'), 'r') as file_handler:
     __version__ = file_handler.read().strip()
 
 
-# Check tensorflow installation to avoid
-# breaking pre-installed tf gpu
-def find_tf_dependency():
-    install_tf, tf_gpu = False, False
-    try:
-        import tensorflow as tf
-        if tf.__version__ < LooseVersion('1.8.0'):
-            install_tf = True
-            # check if a gpu version is needed
-            tf_gpu = tf.test.is_gpu_available()
-    except ImportError:
-        install_tf = True
-        # Check if a nvidia gpu is present
-        for command in ['nvidia-smi', '/usr/bin/nvidia-smi', 'nvidia-smi.exe']:
-            try:
-                if subprocess.call([command]) == 0:
-                    tf_gpu = True
-                    break
-            except IOError:  # command does not exist / is not executable
-                pass
-        if os.environ.get('USE_GPU') == 'True':  # force GPU even if not auto-detected
-            tf_gpu = True
-
-    tf_dependency = []
-    if install_tf:
-        tf_dependency = ['tensorflow-gpu>=1.8.0,<2.0.0'] if tf_gpu else ['tensorflow>=1.8.0,<2.0.0']
-        if tf_gpu:
-            print("A GPU was detected, tensorflow-gpu will be installed")
-
-    return tf_dependency
-
-
 long_description = """
 [![Build Status](https://travis-ci.com/hill-a/stable-baselines.svg?branch=master)](https://travis-ci.com/hill-a/stable-baselines) [![Documentation Status](https://readthedocs.org/projects/stable-baselines/badge/?version=master)](https://stable-baselines.readthedocs.io/en/master/?badge=master) [![Codacy Badge](https://api.codacy.com/project/badge/Grade/3bcb4cd6d76a4270acb16b5fe6dd9efa)](https://www.codacy.com/app/baselines_janitors/stable-baselines?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=hill-a/stable-baselines&amp;utm_campaign=Badge_Grade) [![Codacy Badge](https://api.codacy.com/project/badge/Coverage/3bcb4cd6d76a4270acb16b5fe6dd9efa)](https://www.codacy.com/app/baselines_janitors/stable-baselines?utm_source=github.com&utm_medium=referral&utm_content=hill-a/stable-baselines&utm_campaign=Badge_Coverage)
 
@@ -130,8 +98,14 @@ setup(name='stable_baselines',
           'numpy',
           'pandas',
           'matplotlib'
-      ] + find_tf_dependency(),
+      ],
       extras_require={
+        'tf': [
+            'tensorflow>=1.8.0,<2.0.0',
+        ],
+        'tf-gpu': [
+            'tensorflow-gpu>=1.8.0,<2.0.0',
+        ],
         'mpi': [
             'mpi4py',
         ],

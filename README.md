@@ -234,3 +234,9 @@ If you want to contribute, please read **CONTRIBUTING.md** guide first.
 Stable Baselines was created in the [robotics lab U2IS](http://u2is.ensta-paristech.fr/index.php?lang=en) ([INRIA Flowers](https://flowers.inria.fr/) team) at [ENSTA ParisTech](http://www.ensta-paristech.fr/en).
 
 Logo credits: [L.M. Tenkes](https://www.instagram.com/lucillehue/)
+
+
+## This is a fork of stable-baselines
+Global changes or in specific branches:
+	* Tensorflow was a dependency computed in setup.py, now it's an extra and must
+		be explicitly requested (either 'tf' or 'tf-gpu', if not installed already).
