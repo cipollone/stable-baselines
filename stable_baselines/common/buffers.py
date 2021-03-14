@@ -109,20 +109,26 @@ class ReplayBuffer(object):
         return reward
 
     def _encode_sample(self, idxes: Union[List[int], np.ndarray], env: Optional[VecNormalize] = None):
-        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
-        for i in idxes:
-            data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done = data
-            obses_t.append(np.array(obs_t, copy=False))
-            actions.append(np.array(action, copy=False))
-            rewards.append(reward)
-            obses_tp1.append(np.array(obs_tp1, copy=False))
-            dones.append(done)
-        return (self._normalize_obs(np.array(obses_t), env),
-                np.array(actions),
-                self._normalize_reward(np.array(rewards), env),
-                self._normalize_obs(np.array(obses_tp1), env),
-                np.array(dones))
+        # Initialize arrays
+        batch_size = len(idxes)
+        any_sample = [
+            np.array(elem, copy=False) for elem in self._storage[idxes[0]]
+        ]
+        obses_t, actions, rewards, obses_tp1, done = [
+            np.zeros([batch_size, *e.shape], dtype=e.dtype)
+            for e in any_sample
+        ]
+
+        # Collect from indices
+        for i, idx in enumerate(idxes):
+            sample = self._storage[idx]
+            obses_t[i], actions[i], rewards[i], obses_tp1[i], done[i] = sample
+
+        return (self._normalize_obs(obses_t, env),
+                actions,
+                self._normalize_reward(rewards, env),
+                self._normalize_obs(obses_tp1, env),
+                done)
 
     def sample(self, batch_size: int, env: Optional[VecNormalize] = None, **_kwargs):
         """
@@ -139,7 +145,7 @@ class ReplayBuffer(object):
             - done_mask: (numpy bool) done_mask[i] = 1 if executing act_batch[i] resulted in the end of an episode
                 and 0 otherwise.
         """
-        idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
+        idxes = np.random.randint(0, len(self._storage), size=[batch_size])
         return self._encode_sample(idxes, env=env)
 
 
