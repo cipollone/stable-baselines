@@ -53,6 +53,14 @@ class DQN(OffPolicyRLModel):
         results, you must set `n_cpu_tf_sess` to 1.
     :param n_cpu_tf_sess: (int) The number of threads for TensorFlow operations
         If None, the number of cpu of the current machine will be used.
+    :param active_passive_agents: if True, instead of training one agent, two
+        DQN agents are instantiated. Only one of them selects actions, the
+        other only observes. Both are trained at the same time. The environment
+        must return two rewards, one for the active and one for the passive
+        agent respectively.
+    :param passive_reward_getter: a callable that returns the reward
+        associated to the last env transition. This is mandatory if
+        active_passive_agents=True.
     """
     def __init__(
         self, policy, env, gamma=0.99, learning_rate=5e-4, buffer_size=50000,
@@ -63,8 +71,8 @@ class DQN(OffPolicyRLModel):
         prioritized_replay_beta0=0.4, prioritized_replay_beta_iters=None,
         prioritized_replay_eps=1e-6, param_noise=False, n_cpu_tf_sess=None,
         verbose=0, tensorboard_log=None, _init_setup_model=True,
-        agent_name="Agent1", policy_kwargs=None, full_tensorboard_log=False,
-        seed=None,
+        agent_name="Agent0", policy_kwargs=None, full_tensorboard_log=False,
+        seed=None, active_passive_agents=False, passive_reward_getter=None,
     ):
 
         # TODO: replay_buffer refactoring
@@ -95,6 +103,13 @@ class DQN(OffPolicyRLModel):
         self.full_tensorboard_log = full_tensorboard_log
         self.double_q = double_q
         self.agent_name = agent_name
+        self.active_passive_agents = active_passive_agents
+        self.passive_reward_getter = passive_reward_getter
+
+        # Check
+        assert not self.active_passive_agents or self.passive_reward_getter, (
+            "You must provide a callable for the passive reward"
+        )
 
         self.graph = None
         self.sess = None
@@ -162,6 +177,17 @@ class DQN(OffPolicyRLModel):
                 self.update_target(sess=self.sess)
 
                 self.summary = tf.summary.merge_all()
+
+    def _setup_learn(self):
+        """Initialize some training vars."""
+        super()._setup_learn()
+
+        # If with passive agent, also log its rewards
+        if self.active_passive_agents:
+            assert self.n_envs == 1, (
+                "Active passive agents must be trained on a single environment"
+            )
+            self.episode_reward = np.zeros((2,))
 
     def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="DQN",
               reset_num_timesteps=True, replay_wrapper=None):
@@ -244,21 +270,32 @@ class DQN(OffPolicyRLModel):
                     new_obs_ = self._vec_normalize_env.get_original_obs().squeeze()
                     reward_ = self._vec_normalize_env.get_original_reward().squeeze()
                 else:
-                    # Avoid changing the original ones
                     obs_, new_obs_, reward_ = obs, new_obs, rew
+
+                # If training the passive agent, get the reward
+                if self.active_passive_agents:
+                    passive_reward = self.passive_reward_getter()
+                    rew = (rew, passive_reward)
+
                 # Store transition in the replay buffer.
-                self.replay_buffer_add(obs_, action, reward_, new_obs_, done, info)
+                self.replay_buffer_add(obs_, action, rew, new_obs_, done, info)
                 obs = new_obs
                 # Save the unnormalized observation
                 if self._vec_normalize_env is not None:
                     obs_ = new_obs_
 
                 if writer is not None:
-                    ep_rew = np.array([reward_]).reshape((1, -1))
-                    ep_done = np.array([done]).reshape((1, -1))
+                    ep_rew = np.array(
+                        [[reward_]] if not self.active_passive_agents else
+                        [[reward_], [passive_reward]]
+                    )
+                    ep_done = np.array(
+                        [[done]] if not self.active_passive_agents else
+                        [[done], [done]]
+                    )
                     tf_util.total_episode_reward_logger(
                         self.episode_reward, ep_rew, ep_done, writer,
-                        self.num_timesteps, scope="env",
+                        self.num_timesteps,
                     )
 
                 episode_rewards[-1] += reward_
@@ -292,6 +329,13 @@ class DQN(OffPolicyRLModel):
                                                                                                 env=self._vec_normalize_env)
                         weights, batch_idxes = np.ones_like(rewards), None
                     # pytype:enable=bad-unpacking
+
+                    # Slice rewards
+                    if self.active_passive_agents:
+                        passive_rewards = rewards[:, 1]
+                        rewards = rewards[:, 0]
+
+                    # TODO: until here ^. Now passive agent train step
 
                     if writer is not None:
                         # run loss backprop with summary, but once every 100 steps save the metadata
