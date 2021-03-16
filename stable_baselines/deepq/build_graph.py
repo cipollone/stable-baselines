@@ -135,14 +135,17 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
     :return: (function (TensorFlow Tensor, bool, float): TensorFlow Tensor, (TensorFlow Tensor, TensorFlow Tensor)
         act function to select and action given observation (See the top of the file for details),
         A tuple containing the observation placeholder and the processed observation placeholder respectively.
+        The third object returned is a list of summaries.
     """
+    summaries = []
+
     # Network
     policy = q_func(sess, ob_space, ac_space, 1, 1, None)
 
     # Choose action
     with tf.variable_scope("select_action"):
         eps = tf.get_variable("eps", (), initializer=tf.constant_initializer(0))
-        tf.summary.scalar("eps", eps)
+        summaries.append(tf.summary.scalar("eps", eps))
 
         obs_phs = (policy.obs_ph, policy.processed_obs)
         deterministic_actions = tf.argmax(policy.q_values, axis=1)
@@ -164,7 +167,7 @@ def build_act(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess):
     def act(obs, stochastic=True, update_eps=-1):
         return _act(obs, stochastic, update_eps)
 
-    return act, obs_phs
+    return act, obs_phs, summaries
 
 
 def build_act_with_param_noise(q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess,
@@ -184,7 +187,10 @@ def build_act_with_param_noise(q_func, ob_space, ac_space, stochastic_ph, update
     :return: (function (TensorFlow Tensor, bool, float): TensorFlow Tensor, (TensorFlow Tensor, TensorFlow Tensor)
         act function to select and action given observation (See the top of the file for details),
         A tuple containing the observation placeholder and the processed observation placeholder respectively.
+        The third object returned is a list of summaries.
     """
+    summaries = []
+
     if param_noise_filter_func is None:
         param_noise_filter_func = default_param_noise_filter
 
@@ -193,6 +199,7 @@ def build_act_with_param_noise(q_func, ob_space, ac_space, stochastic_ph, update
     reset_ph = tf.placeholder(tf.bool, (), name="reset")
 
     eps = tf.get_variable("eps", (), initializer=tf.constant_initializer(0))
+    summaries.append(tf.summary.scalar("eps", eps))
     param_noise_scale = tf.get_variable("param_noise_scale", (), initializer=tf.constant_initializer(0.01),
                                         trainable=False)
     param_noise_threshold = tf.get_variable("param_noise_threshold", (), initializer=tf.constant_initializer(0.05),
@@ -322,7 +329,7 @@ def build_act_with_param_noise(q_func, ob_space, ac_space, stochastic_ph, update
             return _perturbed_act(obs, stochastic, update_eps, reset, update_param_noise_threshold,
                                   update_param_noise_scale)
 
-    return act, obs_phs
+    return act, obs_phs, summaries
 
 
 def build_train(
@@ -363,6 +370,8 @@ def build_train(
             See the top of the file for details.
         step_model: (DQNPolicy) Policy for evaluation
     """
+    summaries = []
+
     with tf.variable_scope(scope):
 
         n_actions = ac_space.nvec if isinstance(ac_space, MultiDiscrete) else ac_space.n
@@ -374,12 +383,14 @@ def build_train(
 
             # Act
             if param_noise:
-                act_f, obs_phs = build_act_with_param_noise(
+                act_f, obs_phs, act_summaries = build_act_with_param_noise(
                     q_func, ob_space, ac_space, stochastic_ph, update_eps_ph,
                     sess, param_noise_filter_func=param_noise_filter_func)
             else:
-                act_f, obs_phs = build_act(
+                act_f, obs_phs, act_summaries = build_act(
                     q_func, ob_space, ac_space, stochastic_ph, update_eps_ph, sess)
+
+            summaries.append(act_summaries)
 
             # q network evaluation
             with tf.variable_scope("step_model", reuse=True, custom_getter=tf_util.outer_scope_getter("step_model")):
@@ -427,11 +438,11 @@ def build_train(
             errors = tf_util.huber_loss(td_error)
             weighted_error = tf.reduce_mean(importance_weights_ph * errors)
 
-            tf.summary.scalar("td_error", tf.reduce_mean(td_error))
-            tf.summary.scalar("loss", weighted_error)
+            summaries.append(tf.summary.scalar("td_error", tf.reduce_mean(td_error)))
+            summaries.append(tf.summary.scalar("loss", weighted_error))
 
             if full_tensorboard_log:
-                tf.summary.histogram("td_error", td_error)
+                summaries.append(tf.summary.histogram("td_error", td_error))
 
             # update_target_fn will be called periodically to copy Q network to target Q network
             update_target_expr = []
@@ -448,20 +459,20 @@ def build_train(
                         gradients[i] = (tf.clip_by_norm(grad, grad_norm_clipping), var)
 
         with tf.variable_scope("input_info", reuse=False):
-            tf.summary.scalar('rewards', tf.reduce_mean(rew_t_ph))
-            tf.summary.scalar('importance_weights', tf.reduce_mean(importance_weights_ph))
+            summaries.append(tf.summary.scalar('rewards', tf.reduce_mean(rew_t_ph)))
+            summaries.append(tf.summary.scalar('importance_weights', tf.reduce_mean(importance_weights_ph)))
 
             if full_tensorboard_log:
-                tf.summary.histogram('rewards', rew_t_ph)
-                tf.summary.histogram('importance_weights', importance_weights_ph)
+                summaries.append(tf.summary.histogram('rewards', rew_t_ph))
+                summaries.append(tf.summary.histogram('importance_weights', importance_weights_ph))
                 if tf_util.is_image(obs_phs[0]):
-                    tf.summary.image('observation', obs_phs[0])
+                    summaries.append(tf.summary.image('observation', obs_phs[0]))
                 elif len(obs_phs[0].shape) == 1:
-                    tf.summary.histogram('observation', obs_phs[0])
+                    summaries.append(tf.summary.histogram('observation', obs_phs[0]))
 
     optimize_expr = optimizer.apply_gradients(gradients)
 
-    summary = tf.summary.merge_all()
+    summary = tf.summary.merge(summaries)
 
     # Create callable functions
     train = tf_util.function(

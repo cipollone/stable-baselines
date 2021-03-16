@@ -12,6 +12,8 @@ from stable_baselines.common.buffers import ReplayBuffer, PrioritizedReplayBuffe
 from stable_baselines.deepq.build_graph import build_train
 from stable_baselines.deepq.policies import DQNPolicy
 
+# TODO: also save second agent's weights
+
 
 class DQN(OffPolicyRLModel):
     """
@@ -46,6 +48,9 @@ class DQN(OffPolicyRLModel):
     :param verbose: (int) the verbosity level: 0 none, 1 training information, 2 tensorflow debug
     :param tensorboard_log: (str) the log location for tensorboard (if None, no logging)
     :param _init_setup_model: (bool) Whether or not to build the network at the creation of the instance
+    :param graph: if given, the network is defined inside the given graph.
+        Otherwise a new one is created.
+    :param sess: same logic as graph. Pass both of them to reuse an existing session.
     :param full_tensorboard_log: (bool) enable additional logging when using tensorboard
         WARNING: this logging can take a lot of space quickly
     :param seed: (int) Seed for the pseudo-random generators (python, numpy, tensorflow).
@@ -70,9 +75,10 @@ class DQN(OffPolicyRLModel):
         prioritized_replay=False, prioritized_replay_alpha=0.6,
         prioritized_replay_beta0=0.4, prioritized_replay_beta_iters=None,
         prioritized_replay_eps=1e-6, param_noise=False, n_cpu_tf_sess=None,
-        verbose=0, tensorboard_log=None, _init_setup_model=True,
-        agent_name="Agent0", policy_kwargs=None, full_tensorboard_log=False,
-        seed=None, active_passive_agents=False, passive_reward_getter=None,
+        verbose=0, tensorboard_log=None, _init_setup_model=True, graph=None,
+        sess=None, agent_name="Agent0", policy_kwargs=None,
+        full_tensorboard_log=False, seed=None, active_passive_agents=False,
+        passive_reward_getter=None,
     ):
 
         # TODO: replay_buffer refactoring
@@ -106,13 +112,17 @@ class DQN(OffPolicyRLModel):
         self.active_passive_agents = active_passive_agents
         self.passive_reward_getter = passive_reward_getter
 
+        self.graph = graph
+        self.sess = sess
+
         # Check
         assert not self.active_passive_agents or self.passive_reward_getter, (
             "You must provide a callable for the passive reward"
         )
+        assert (self.graph and self.sess) or (not self.graph and not self.sess), (
+            "You must provide both a graph and a session or none of them"
+        )
 
-        self.graph = None
-        self.sess = None
         self._train_step = None
         self.step_model = None
         self.update_target = None
@@ -123,9 +133,48 @@ class DQN(OffPolicyRLModel):
         self.exploration = None
         self.params = None
         self.summary = None
+        self.passive_agent = None
 
         if _init_setup_model:
             self.setup_model()
+
+        # Now also create the passive agent, if requested
+        if self.active_passive_agents:
+            self.passive_agent = DQN(
+                policy=policy,
+                env=env,
+                gamma=gamma,
+                learning_rate=learning_rate,
+                buffer_size=buffer_size,
+                exploration_fraction=exploration_fraction,
+                exploration_final_eps=exploration_final_eps,
+                exploration_initial_eps=exploration_initial_eps,
+                train_freq=train_freq,
+                batch_size=batch_size,
+                double_q=double_q,
+                learning_starts=learning_starts,
+                target_network_update_freq=target_network_update_freq,
+                prioritized_replay=False,
+                prioritized_replay_alpha=prioritized_replay_alpha,
+                prioritized_replay_beta0=prioritized_replay_beta0,
+                prioritized_replay_beta_iters=prioritized_replay_beta_iters,
+                prioritized_replay_eps=prioritized_replay_eps,
+                param_noise=param_noise,
+                n_cpu_tf_sess=n_cpu_tf_sess,
+                verbose=verbose,
+                tensorboard_log=tensorboard_log,
+                _init_setup_model=_init_setup_model,
+                graph=self.graph,
+                sess=self.sess,
+                agent_name="Agent1",
+                policy_kwargs=policy_kwargs,
+                full_tensorboard_log=full_tensorboard_log,
+                seed=seed,
+                active_passive_agents=False,
+                passive_reward_getter=None,
+            )
+            # Update summaries with passive agent
+            self.summary = tf.summary.merge_all()
 
     def _get_pretrain_placeholders(self):
         policy = self.step_model
@@ -146,10 +195,15 @@ class DQN(OffPolicyRLModel):
             assert issubclass(test_policy, DQNPolicy), "Error: the input policy for the DQN model must be " \
                                                        "an instance of DQNPolicy."
 
-            self.graph = tf.Graph()
+            # New graph and session
+            if self.graph is None and self.sess is None:
+                self.graph = tf.Graph()
+                self.sess = tf_util.make_session(
+                    num_cpu=self.n_cpu_tf_sess, graph=self.graph)
+
+            # Enter graph and define
             with self.graph.as_default():
                 self.set_random_seed(self.seed)
-                self.sess = tf_util.make_session(num_cpu=self.n_cpu_tf_sess, graph=self.graph)
 
                 optimizer = tf.train.AdamOptimizer(
                     learning_rate=self.learning_rate,
@@ -335,25 +389,22 @@ class DQN(OffPolicyRLModel):
                         passive_rewards = rewards[:, 1]
                         rewards = rewards[:, 0]
 
-                    # TODO: until here ^. Now passive agent train step
+                    # Agent train step
+                    summary, td_errors = self._train_step(
+                        obses_t, actions, rewards, obses_tp1, obses_tp1, dones,
+                        weights, sess=self.sess
+                    )
+                    writer.add_summary(summary, self.num_timesteps)
 
-                    if writer is not None:
-                        # run loss backprop with summary, but once every 100 steps save the metadata
-                        # (memory, compute time, ...)
-                        if (1 + self.num_timesteps) % 100 == 0:
-                            run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                            run_metadata = tf.RunMetadata()
-                            summary, td_errors = self._train_step(obses_t, actions, rewards, obses_tp1, obses_tp1,
-                                                                  dones, weights, sess=self.sess, options=run_options,
-                                                                  run_metadata=run_metadata)
-                            writer.add_run_metadata(run_metadata, 'step%d' % self.num_timesteps)
-                        else:
-                            summary, td_errors = self._train_step(obses_t, actions, rewards, obses_tp1, obses_tp1,
-                                                                  dones, weights, sess=self.sess)
-                        writer.add_summary(summary, self.num_timesteps)
-                    else:
-                        _, td_errors = self._train_step(obses_t, actions, rewards, obses_tp1, obses_tp1, dones, weights,
-                                                        sess=self.sess)
+                    # Passive agent train step
+                    if self.active_passive_agents:
+                        summary2, td_errors2 = self.passive_agent._train_step(
+                            obses_t, actions, passive_rewards, obses_tp1,
+                            obses_tp1, dones, weights, sess=self.sess
+                        )
+                        writer.add_summary(summary2, self.num_timesteps)
+
+                    # TODO: full stack trace removed for simplicity
 
                     if self.prioritized_replay:
                         new_priorities = np.abs(td_errors) + self.prioritized_replay_eps
