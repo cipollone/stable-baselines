@@ -12,8 +12,6 @@ from stable_baselines.common.buffers import ReplayBuffer, PrioritizedReplayBuffe
 from stable_baselines.deepq.build_graph import build_train
 from stable_baselines.deepq.policies import DQNPolicy
 
-# TODO: also save second agent's weights
-
 
 class DQN(OffPolicyRLModel):
     """
@@ -66,6 +64,9 @@ class DQN(OffPolicyRLModel):
     :param passive_reward_getter: a callable that returns the reward
         associated to the last env transition. This is mandatory if
         active_passive_agents=True.
+    :param other_args: a dictionary of optinal parameters that are stored
+        in the new instance along with the other parameters. These are restored
+        first and overriden by the other params.
     """
     def __init__(
         self, policy, env, gamma=0.99, learning_rate=5e-4, buffer_size=50000,
@@ -78,7 +79,7 @@ class DQN(OffPolicyRLModel):
         verbose=0, tensorboard_log=None, _init_setup_model=True, graph=None,
         sess=None, agent_name="Agent0", policy_kwargs=None,
         full_tensorboard_log=False, seed=None, active_passive_agents=False,
-        passive_reward_getter=None,
+        passive_reward_getter=None, other_args={},
     ):
 
         # TODO: replay_buffer refactoring
@@ -88,6 +89,9 @@ class DQN(OffPolicyRLModel):
             policy_kwargs=policy_kwargs, seed=seed,
             n_cpu_tf_sess=n_cpu_tf_sess
         )
+
+        # Store the arguments
+        self.__dict__.update(other_args)
 
         self.param_noise = param_noise
         self.learning_starts = learning_starts
@@ -138,49 +142,63 @@ class DQN(OffPolicyRLModel):
         if _init_setup_model:
             self.setup_model()
 
-        # Now also create the passive agent, if requested
-        if self.active_passive_agents:
-            self.passive_agent = DQN(
-                policy=policy,
-                env=env,
-                gamma=gamma,
-                learning_rate=learning_rate,
-                buffer_size=buffer_size,
-                exploration_fraction=exploration_fraction,
-                exploration_final_eps=exploration_final_eps,
-                exploration_initial_eps=exploration_initial_eps,
-                train_freq=train_freq,
-                batch_size=batch_size,
-                double_q=double_q,
-                learning_starts=learning_starts,
-                target_network_update_freq=target_network_update_freq,
-                prioritized_replay=False,
-                prioritized_replay_alpha=prioritized_replay_alpha,
-                prioritized_replay_beta0=prioritized_replay_beta0,
-                prioritized_replay_beta_iters=prioritized_replay_beta_iters,
-                prioritized_replay_eps=prioritized_replay_eps,
-                param_noise=param_noise,
-                n_cpu_tf_sess=n_cpu_tf_sess,
-                verbose=verbose,
-                tensorboard_log=tensorboard_log,
-                _init_setup_model=_init_setup_model,
-                graph=self.graph,
-                sess=self.sess,
-                agent_name="Agent1",
-                policy_kwargs=policy_kwargs,
-                full_tensorboard_log=full_tensorboard_log,
-                seed=seed,
-                active_passive_agents=False,
-                passive_reward_getter=None,
-            )
-            # Update summaries with passive agent
-            self.summary = tf.summary.merge_all()
-
     def _get_pretrain_placeholders(self):
         policy = self.step_model
         return policy.obs_ph, tf.placeholder(tf.int32, [None]), policy.q_values
 
+    def setup_graph_sess(self):
+        """Create graph and session, if not provided."""
+        if self.graph is None and self.sess is None:
+            self.graph = tf.Graph()
+            self.sess = tf_util.make_session(
+                num_cpu=self.n_cpu_tf_sess, graph=self.graph)
+
     def setup_model(self):
+        """Setup model: define graph and networks."""
+        
+        self.setup_graph_sess()
+
+        # Define the passive agent, if requested
+        if self.active_passive_agents:
+            self.passive_agent = DQN(
+                policy=self.policy,
+                env=self.env,
+                gamma=self.gamma,
+                learning_rate=self.learning_rate,
+                buffer_size=self.buffer_size,
+                exploration_fraction=self.exploration_fraction,
+                exploration_final_eps=self.exploration_final_eps,
+                exploration_initial_eps=self.exploration_initial_eps,
+                train_freq=self.train_freq,
+                batch_size=self.batch_size,
+                double_q=self.double_q,
+                learning_starts=self.learning_starts,
+                target_network_update_freq=self.target_network_update_freq,
+                prioritized_replay=False,
+                prioritized_replay_alpha=self.prioritized_replay_alpha,
+                prioritized_replay_beta0=self.prioritized_replay_beta0,
+                prioritized_replay_beta_iters=self.prioritized_replay_beta_iters,
+                prioritized_replay_eps=self.prioritized_replay_eps,
+                param_noise=self.param_noise,
+                n_cpu_tf_sess=self.n_cpu_tf_sess,
+                verbose=self.verbose,
+                tensorboard_log=self.tensorboard_log,
+                graph=self.graph,
+                sess=self.sess,
+                agent_name="Agent1",
+                policy_kwargs=self.policy_kwargs,
+                full_tensorboard_log=self.full_tensorboard_log,
+                seed=self.seed,
+                active_passive_agents=False,
+                passive_reward_getter=None,
+                other_args=dict(
+                    observation_space=self.observation_space,
+                    action_space=self.action_space,
+                    n_envs=self.n_envs,
+                    _vectorize_action=self._vectorize_action,
+                )
+            )
+        # Setup this agent now
 
         with SetVerbosity(self.verbose):
             assert not isinstance(self.action_space, gym.spaces.Box), \
@@ -194,12 +212,6 @@ class DQN(OffPolicyRLModel):
                 test_policy = self.policy
             assert issubclass(test_policy, DQNPolicy), "Error: the input policy for the DQN model must be " \
                                                        "an instance of DQNPolicy."
-
-            # New graph and session
-            if self.graph is None and self.sess is None:
-                self.graph = tf.Graph()
-                self.sess = tf_util.make_session(
-                    num_cpu=self.n_cpu_tf_sess, graph=self.graph)
 
             # Enter graph and define
             with self.graph.as_default():
@@ -224,7 +236,7 @@ class DQN(OffPolicyRLModel):
                     scope=self.agent_name,
                 )
                 self.proba_step = self.step_model.proba_step
-                self.params = tf_util.get_trainable_vars("deepq")
+                self.params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
                 # Initialize the parameters and copy them to the target network.
                 tf_util.initialize(self.sess)
@@ -483,32 +495,44 @@ class DQN(OffPolicyRLModel):
         return self.params
 
     def save(self, save_path, cloudpickle=False):
+        """Save the model to file.
+
+        Saves this model to checkpoint, except the environment and
+        passive_reward_getter.
+        """
         # params
         data = {
-            "double_q": self.double_q,
-            "param_noise": self.param_noise,
-            "learning_starts": self.learning_starts,
+            "policy": self.policy,
+            "gamma": self.gamma,
+            "learning_rate": self.learning_rate,
+            "buffer_size": self.buffer_size,
+            "exploration_fraction": self.exploration_fraction,
+            "exploration_final_eps": self.exploration_final_eps,
+            "exploration_initial_eps": self.exploration_initial_eps,
             "train_freq": self.train_freq,
-            "prioritized_replay": self.prioritized_replay,
-            "prioritized_replay_eps": self.prioritized_replay_eps,
             "batch_size": self.batch_size,
+            "double_q": self.double_q,
+            "learning_starts": self.learning_starts,
             "target_network_update_freq": self.target_network_update_freq,
+            "prioritized_replay": self.prioritized_replay,
             "prioritized_replay_alpha": self.prioritized_replay_alpha,
             "prioritized_replay_beta0": self.prioritized_replay_beta0,
             "prioritized_replay_beta_iters": self.prioritized_replay_beta_iters,
-            "exploration_final_eps": self.exploration_final_eps,
-            "exploration_fraction": self.exploration_fraction,
-            "learning_rate": self.learning_rate,
-            "gamma": self.gamma,
+            "prioritized_replay_eps": self.prioritized_replay_eps,
+            "param_noise": self.param_noise,
+            "n_cpu_tf_sess": self.n_cpu_tf_sess,
             "verbose": self.verbose,
+            "tensorboard_log": self.tensorboard_log,
+            "agent_name": self.agent_name,
+            "policy_kwargs": self.policy_kwargs,
+            "full_tensorboard_log": self.full_tensorboard_log,
+            "seed": self.seed,
+            "active_passive_agents": self.active_passive_agents,
+            # Base classes params
             "observation_space": self.observation_space,
             "action_space": self.action_space,
-            "policy": self.policy,
             "n_envs": self.n_envs,
-            "n_cpu_tf_sess": self.n_cpu_tf_sess,
-            "seed": self.seed,
             "_vectorize_action": self._vectorize_action,
-            "policy_kwargs": self.policy_kwargs
         }
 
         params_to_save = self.get_parameters()
