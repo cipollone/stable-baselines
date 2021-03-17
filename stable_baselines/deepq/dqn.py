@@ -68,6 +68,7 @@ class DQN(OffPolicyRLModel):
         in the new instance along with the other parameters. These are restored
         first and overriden by the other params.
     """
+
     def __init__(
         self, policy, env, gamma=0.99, learning_rate=5e-4, buffer_size=50000,
         exploration_fraction=0.1, exploration_final_eps=0.02,
@@ -79,7 +80,7 @@ class DQN(OffPolicyRLModel):
         verbose=0, tensorboard_log=None, _init_setup_model=True, graph=None,
         sess=None, agent_name="Agent0", policy_kwargs=None,
         full_tensorboard_log=False, seed=None, active_passive_agents=False,
-        passive_reward_getter=None, other_args={},
+        passive_reward_getter=None, other_args=None,
     ):
 
         # TODO: replay_buffer refactoring
@@ -91,7 +92,8 @@ class DQN(OffPolicyRLModel):
         )
 
         # Store the arguments
-        self.__dict__.update(other_args)
+        if other_args is not None:
+            self.__dict__.update(other_args)
 
         self.param_noise = param_noise
         self.learning_starts = learning_starts
@@ -154,8 +156,8 @@ class DQN(OffPolicyRLModel):
                 num_cpu=self.n_cpu_tf_sess, graph=self.graph)
 
     def setup_model(self):
-        """Setup model: define graph and networks."""
-        
+        """Model setup: define graph and networks."""
+
         self.setup_graph_sess()
 
         # Define the passive agent, if requested
