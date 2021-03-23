@@ -49,7 +49,7 @@ def data_to_json(data):
             # from other languages/humans, so we have an
             # idea what was being stored.
             base64_encoded = base64.b64encode(
-                cloudpickle.dumps(data_item)
+                cloudpickle.dumps(data_item, protocol=4)
             ).decode()
 
             # Use ":" to make sure we do

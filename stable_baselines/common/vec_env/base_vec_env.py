@@ -328,7 +328,7 @@ class CloudpickleWrapper(object):
         self.var = var
 
     def __getstate__(self):
-        return cloudpickle.dumps(self.var)
+        return cloudpickle.dumps(self.var, protocol=4)
 
     def __setstate__(self, obs):
         self.var = cloudpickle.loads(obs)
