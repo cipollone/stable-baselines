@@ -169,7 +169,7 @@ class VecNormalize(VecEnvWrapper):
 
     def save(self, save_path):
         with open(save_path, "wb") as file_handler:
-            pickle.dump(self, file_handler)
+            pickle.dump(self, file_handler, protocol=4)
 
     def save_running_average(self, path):
         """
@@ -182,7 +182,7 @@ class VecNormalize(VecEnvWrapper):
                       "use `save` or pickle instead.", DeprecationWarning)
         for rms, name in zip([self.obs_rms, self.ret_rms], ['obs_rms', 'ret_rms']):
             with open("{}/{}.pkl".format(path, name), 'wb') as file_handler:
-                pickle.dump(rms, file_handler)
+                pickle.dump(rms, file_handler, protocol=4)
 
     def load_running_average(self, path):
         """
